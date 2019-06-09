@@ -10,6 +10,7 @@ const storage = require('../../adapters/storage');
 const urlService = require('../../services/url');
 const sitemapHandler = require('../../data/xml/sitemap/handler');
 const themeMiddleware = require('../../services/themes').middleware;
+const membersService = require('../../services/members');
 const siteRoutes = require('./routes');
 const shared = require('../shared');
 
@@ -48,6 +49,25 @@ module.exports = function setupSiteApp(options = {}) {
     // /public/ghost-sdk.js
     siteApp.use(shared.middlewares.servePublicFile('public/ghost-sdk.js', 'application/javascript', constants.ONE_HOUR_S));
     siteApp.use(shared.middlewares.servePublicFile('public/ghost-sdk.min.js', 'application/javascript', constants.ONE_YEAR_S));
+
+    // /public/members.js
+    siteApp.get('/public/members-theme-bindings.js',
+        shared.middlewares.labs('members'),
+        shared.middlewares.servePublicFile.createPublicFileMiddleware(
+            'public/members-theme-bindings.js',
+            'application/javascript',
+            constants.ONE_HOUR_S
+        )
+    );
+    siteApp.get('/public/members.js',
+        shared.middlewares.labs('members'),
+        shared.middlewares.servePublicFile.createPublicFileMiddleware(
+            'public/members.js',
+            'application/javascript',
+            constants.ONE_HOUR_S
+        )
+    );
+
     // Serve sitemap.xsl file
     siteApp.use(shared.middlewares.servePublicFile('sitemap.xsl', 'text/xsl', constants.ONE_DAY_S));
 
@@ -68,6 +88,41 @@ module.exports = function setupSiteApp(options = {}) {
     // Else we end up with circular dependencies
     require('../../helpers').loadCoreHelpers();
     debug('Helpers done');
+
+    // @TODO only loads this stuff if members is enabled
+    // Set req.member & res.locals.member if a cookie is set
+    siteApp.post('/members/ssr', shared.middlewares.labs.members, function (req, res) {
+        membersService.api.ssr.exchangeTokenForSession(req, res).then(() => {
+            res.writeHead(200);
+            res.end();
+        }).catch((err) => {
+            res.writeHead(err.statusCode);
+            res.end(err.message);
+        });
+    });
+    siteApp.delete('/members/ssr', shared.middlewares.labs.members, function (req, res) {
+        membersService.api.ssr.deleteSession(req, res).then(() => {
+            res.writeHead(204);
+            res.end();
+        }).catch((err) => {
+            res.writeHead(err.statusCode);
+            res.end(err.message);
+        });
+    });
+    siteApp.use(function (req, res, next) {
+        membersService.api.ssr.getMemberDataFromSession(req, res).then((member) => {
+            req.member = member;
+            next();
+        }).catch(() => {
+            // @TODO log error?
+            req.member = null;
+            next();
+        });
+    });
+    siteApp.use(function (req, res, next) {
+        res.locals.member = req.member;
+        next();
+    });
 
     // Theme middleware
     // This should happen AFTER any shared assets are served, as it only changes things to do with templates
@@ -105,8 +160,16 @@ module.exports = function setupSiteApp(options = {}) {
     siteApp.use(shared.middlewares.prettyUrls);
 
     // ### Caching
-    // Site frontend is cacheable
-    siteApp.use(shared.middlewares.cacheControl('public'));
+    // Site frontend is cacheable UNLESS request made by a member
+    const publicCacheControl = shared.middlewares.cacheControl('public');
+    const privateCacheControl = shared.middlewares.cacheControl('private');
+    siteApp.use(function (req, res, next) {
+        if (req.member) {
+            return privateCacheControl(req, res, next);
+        } else {
+            return publicCacheControl(req, res, next);
+        }
+    });
 
     // Fetch the frontend client into res.locals
     siteApp.use(shared.middlewares.frontendClient);

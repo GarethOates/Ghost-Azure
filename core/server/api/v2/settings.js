@@ -9,6 +9,12 @@ const urlService = require('../../services/url');
 const common = require('../../lib/common');
 const settingsCache = require('../../services/settings/cache');
 
+const SETTINGS_BLACKLIST = [
+    'members_public_key',
+    'members_private_key',
+    'members_session_secret'
+];
+
 module.exports = {
     docName: 'settings',
 
@@ -28,7 +34,9 @@ module.exports = {
             // CASE: omit core settings unless internal request
             if (!frame.options.context.internal) {
                 settings = _.filter(settings, (setting) => {
-                    return setting.type !== 'core';
+                    const isCore = setting.type === 'core';
+                    const isBlacklisted = SETTINGS_BLACKLIST.includes(setting.key);
+                    return !isBlacklisted && !isCore;
                 });
             }
 
@@ -46,21 +54,27 @@ module.exports = {
             }
         },
         permissions: {
-            before(frame) {
-                let setting = settingsCache.get(frame.options.key, {resolve: false});
-
-                if (setting.type === 'core' && !(frame.options.context && frame.options.context.internal)) {
-                    return Promise.reject(new common.errors.NoPermissionError({
-                        message: common.i18n.t('errors.api.settings.accessCoreSettingFromExtReq')
-                    }));
-                }
-            },
             identifier(frame) {
                 return frame.options.key;
             }
         },
         query(frame) {
             let setting = settingsCache.get(frame.options.key, {resolve: false});
+
+            if (!setting) {
+                return Promise.reject(new common.errors.NotFoundError({
+                    message: common.i18n.t('errors.api.settings.problemFindingSetting', {
+                        key: frame.options.key
+                    })
+                }));
+            }
+
+            // @TODO: handle in settings model permissible fn
+            if (setting.type === 'core' && !(frame.options.context && frame.options.context.internal)) {
+                return Promise.reject(new common.errors.NoPermissionError({
+                    message: common.i18n.t('errors.api.settings.accessCoreSettingFromExtReq')
+                }));
+            }
 
             return {
                 [frame.options.key]: setting
@@ -101,6 +115,29 @@ module.exports = {
             frame.data.settings = _.reject(frame.data.settings, (setting) => {
                 return setting.key === 'type';
             });
+
+            const errors = [];
+
+            _.each(frame.data.settings, (setting) => {
+                const settingFromCache = settingsCache.get(setting.key, {resolve: false});
+
+                if (!settingFromCache) {
+                    errors.push(new common.errors.NotFoundError({
+                        message: common.i18n.t('errors.api.settings.problemFindingSetting', {
+                            key: setting.key
+                        })
+                    }));
+                } else if (settingFromCache.type === 'core' && !(frame.options.context && frame.options.context.internal)) {
+                    // @TODO: handle in settings model permissible fn
+                    errors.push(new common.errors.NoPermissionError({
+                        message: common.i18n.t('errors.api.settings.accessCoreSettingFromExtReq')
+                    }));
+                }
+            });
+
+            if (errors.length) {
+                return Promise.reject(errors[0]);
+            }
 
             return models.Settings.edit(frame.data.settings, frame.options);
         }

@@ -1,16 +1,57 @@
-const {absoluteToRelative, getBlogUrl, STATIC_IMAGE_URL_PREFIX} = require('../../../../../../services/url/utils');
+const _ = require('lodash');
+const url = require('url');
+const utils = require('../../../../../../services/url/utils');
+
+const handleCanonicalUrl = (canonicalUrl) => {
+    const blogURl = utils.getBlogUrl();
+    const isSameProtocol = url.parse(canonicalUrl).protocol === url.parse(blogURl).protocol;
+    const blogDomain = blogURl.replace(/^http(s?):\/\//, '').replace(/\/$/, '');
+    const absolute = canonicalUrl.replace(/^http(s?):\/\//, '');
+
+    // We only want to transform to a relative URL when the canonical URL matches the current
+    // Blog URL incl. the same protocol. This allows users to keep e.g. Facebook comments after
+    // a http -> https switch
+    if (absolute.startsWith(blogDomain) && isSameProtocol) {
+        return utils.absoluteToRelative(canonicalUrl, {withoutSubdirectory: true});
+    }
+
+    return canonicalUrl;
+};
 
 const handleImageUrl = (imageUrl) => {
-    const blogUrl = getBlogUrl().replace(/^http(s?):\/\//, '').replace(/\/$/, '');
+    const blogDomain = utils.getBlogUrl().replace(/^http(s?):\/\//, '').replace(/\/$/, '');
     const imageUrlAbsolute = imageUrl.replace(/^http(s?):\/\//, '');
-    const imagePathRe = new RegExp(`^${blogUrl}/${STATIC_IMAGE_URL_PREFIX}`);
+    const imagePathRe = new RegExp(`^${blogDomain}/${utils.STATIC_IMAGE_URL_PREFIX}`);
+
     if (imagePathRe.test(imageUrlAbsolute)) {
-        return absoluteToRelative(imageUrl);
+        return utils.absoluteToRelative(imageUrl);
     }
+
     return imageUrl;
 };
 
+const handleContentUrls = (content) => {
+    const blogDomain = utils.getBlogUrl().replace(/^http(s?):\/\//, '').replace(/\/$/, '');
+    const imagePathRe = new RegExp(`(http(s?)://)?${blogDomain}/${utils.STATIC_IMAGE_URL_PREFIX}`, 'g');
+
+    const matches = _.uniq(content.match(imagePathRe));
+
+    if (matches) {
+        matches.forEach((match) => {
+            const relative = utils.absoluteToRelative(match);
+            content = content.replace(new RegExp(match, 'g'), relative);
+        });
+    }
+
+    return content;
+};
+
 const forPost = (attrs, options) => {
+    // make all content image URLs relative, ref: https://github.com/TryGhost/Ghost/issues/10477
+    if (attrs.mobiledoc) {
+        attrs.mobiledoc = handleContentUrls(attrs.mobiledoc);
+    }
+
     if (attrs.feature_image) {
         attrs.feature_image = handleImageUrl(attrs.feature_image);
     }
@@ -21,6 +62,10 @@ const forPost = (attrs, options) => {
 
     if (attrs.twitter_image) {
         attrs.twitter_image = handleImageUrl(attrs.twitter_image);
+    }
+
+    if (attrs.canonical_url) {
+        attrs.canonical_url = handleCanonicalUrl(attrs.canonical_url);
     }
 
     if (options && options.withRelated) {
@@ -62,6 +107,15 @@ const forTag = (attrs) => {
     return attrs;
 };
 
+const forSetting = (attrs) => {
+    if (attrs.value) {
+        attrs.value = handleImageUrl(attrs.value);
+    }
+
+    return attrs;
+};
+
 module.exports.forPost = forPost;
 module.exports.forUser = forUser;
 module.exports.forTag = forTag;
+module.exports.forSetting = forSetting;

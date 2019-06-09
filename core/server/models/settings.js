@@ -19,8 +19,10 @@ function parseDefaultSettings() {
         dynamicDefault = {
             db_hash: uuid.v4(),
             public_hash: crypto.randomBytes(15).toString('hex'),
+            // @TODO: session_secret would ideally be named "admin_session_secret"
             session_secret: crypto.randomBytes(32).toString('hex'),
-            members_session_secret: crypto.randomBytes(32).toString('hex')
+            members_session_secret: crypto.randomBytes(32).toString('hex'),
+            theme_session_secret: crypto.randomBytes(32).toString('hex')
         };
 
     const membersKeypair = keypair({
@@ -71,16 +73,22 @@ Settings = ghostBookshelf.Model.extend({
     },
 
     onDestroyed: function onDestroyed(model, options) {
+        ghostBookshelf.Model.prototype.onDestroyed.apply(this, arguments);
+
         model.emitChange('deleted', options);
         model.emitChange(model._previousAttributes.key + '.' + 'deleted', options);
     },
 
     onCreated: function onCreated(model, response, options) {
+        ghostBookshelf.Model.prototype.onCreated.apply(this, arguments);
+
         model.emitChange('added', options);
         model.emitChange(model.attributes.key + '.' + 'added', options);
     },
 
     onUpdated: function onUpdated(model, response, options) {
+        ghostBookshelf.Model.prototype.onUpdated.apply(this, arguments);
+
         model.emitChange('edited', options);
         model.emitChange(model.attributes.key + '.' + 'edited', options);
     },
@@ -92,6 +100,33 @@ Settings = ghostBookshelf.Model.extend({
             .then(function then() {
                 return validation.validateSettings(getDefaultSettings(), self);
             });
+    },
+
+    format() {
+        const attrs = ghostBookshelf.Model.prototype.format.apply(this, arguments);
+
+        // @NOTE: type TEXT will transform boolean to "0"
+        if (_.isBoolean(attrs.value)) {
+            attrs.value = attrs.value.toString();
+        }
+
+        return attrs;
+    },
+
+    parse() {
+        const attrs = ghostBookshelf.Model.prototype.parse.apply(this, arguments);
+
+        // transform "0" to false
+        // transform "false" to false
+        if (attrs.value === '0' || attrs.value === '1') {
+            attrs.value = !!+attrs.value;
+        }
+
+        if (attrs.value === 'false' || attrs.value === 'true') {
+            attrs.value = JSON.parse(attrs.value);
+        }
+
+        return attrs;
     }
 }, {
     findOne: function (data, options) {

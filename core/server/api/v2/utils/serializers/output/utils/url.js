@@ -1,8 +1,35 @@
 const _ = require('lodash');
 const urlService = require('../../../../../../services/url');
+const localUtils = require('../../../index');
 
-const forPost = (id, attrs, options) => {
+const forPost = (id, attrs, frame) => {
     attrs.url = urlService.getUrlByResourceId(id, {absolute: true});
+
+    /**
+     * CASE: admin api should serve preview urls
+     *
+     * @NOTE
+     * The url service has no clue of the draft/scheduled concept. It only generates urls for published resources.
+     * Adding a hardcoded fallback into the url service feels wrong IMO.
+     *
+     * Imagine the site won't be part of core and core does not serve urls anymore.
+     * Core needs to offer a preview API, which returns draft posts.
+     * That means the url is no longer /p/:uuid, it's e.g. GET /api/v2/content/preview/:uuid/.
+     * /p/ is a concept of the site, not of core.
+     *
+     * The site is not aware of existing drafts. It won't be able to get the uuid.
+     *
+     * Needs further discussion.
+     */
+    if (!localUtils.isContentAPI(frame)) {
+        if (attrs.status !== 'published' && attrs.url.match(/\/404\//)) {
+            attrs.url = urlService
+                .utils
+                .urlFor({
+                    relativeUrl: urlService.utils.urlJoin('/p', attrs.uuid, '/')
+                }, null, true);
+        }
+    }
 
     if (attrs.feature_image) {
         attrs.feature_image = urlService.utils.urlFor('image', {image: attrs.feature_image}, true);
@@ -16,12 +43,16 @@ const forPost = (id, attrs, options) => {
         attrs.twitter_image = urlService.utils.urlFor('image', {image: attrs.twitter_image}, true);
     }
 
+    if (attrs.canonical_url) {
+        attrs.canonical_url = urlService.utils.relativeToAbsolute(attrs.canonical_url);
+    }
+
     if (attrs.html) {
         const urlOptions = {
             assetsOnly: true
         };
 
-        if (options.absolute_urls) {
+        if (frame.options.absolute_urls) {
             urlOptions.assetsOnly = false;
         }
 
@@ -33,15 +64,17 @@ const forPost = (id, attrs, options) => {
         ).html();
     }
 
-    if (options.columns && !options.columns.includes('url')) {
+    if (frame.options.columns && !frame.options.columns.includes('url')) {
         delete attrs.url;
     }
 
     return attrs;
 };
 
-const forUser = (id, attrs) => {
-    attrs.url = urlService.getUrlByResourceId(id, {absolute: true});
+const forUser = (id, attrs, options) => {
+    if (!options.columns || (options.columns && options.columns.includes('url'))) {
+        attrs.url = urlService.getUrlByResourceId(id, {absolute: true});
+    }
 
     if (attrs.profile_image) {
         attrs.profile_image = urlService.utils.urlFor('image', {image: attrs.profile_image}, true);
@@ -54,8 +87,10 @@ const forUser = (id, attrs) => {
     return attrs;
 };
 
-const forTag = (id, attrs) => {
-    attrs.url = urlService.getUrlByResourceId(id, {absolute: true});
+const forTag = (id, attrs, options) => {
+    if (!options.columns || (options.columns && options.columns.includes('url'))) {
+        attrs.url = urlService.getUrlByResourceId(id, {absolute: true});
+    }
 
     if (attrs.feature_image) {
         attrs.feature_image = urlService.utils.urlFor('image', {image: attrs.feature_image}, true);
@@ -90,7 +125,12 @@ const forSettings = (attrs) => {
     return attrs;
 };
 
+const forImage = (path) => {
+    return urlService.utils.urlFor('image', {image: path}, true);
+};
+
 module.exports.forPost = forPost;
 module.exports.forUser = forUser;
 module.exports.forTag = forTag;
 module.exports.forSettings = forSettings;
+module.exports.forImage = forImage;

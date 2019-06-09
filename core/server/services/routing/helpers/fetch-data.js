@@ -4,39 +4,50 @@
  */
 const _ = require('lodash');
 const Promise = require('bluebird');
+const config = require('../../../config');
 
 // The default settings for a default post query
+// @TODO: get rid of this config and use v0.1 or v2 config
 const queryDefaults = {
     type: 'browse',
     resource: 'posts',
-    controller: 'posts',
+    controller: 'postsPublic',
     options: {}
 };
 
 /**
- * @deprecated: `author`, will be removed in Ghost 3.0
+ * The theme expects to have access to the relations by default e.g. {{post.authors}}
  */
 const defaultQueryOptions = {
     options: {
+        /**
+         * @deprecated: `author`, will be removed in Ghost 3.0
+         * @TODO: Remove "author" when we drop v0.1
+         */
         include: 'author,authors,tags'
     }
 };
 
-/**
- * Default post query needs to always include author, authors & tags
- */
+const defaultDataQueryOptions = {
+    post: _.cloneDeep(defaultQueryOptions),
+    page: _.cloneDeep(defaultQueryOptions),
+    tag: null,
+    author: null
+};
+
 const defaultPostQuery = _.cloneDeep(queryDefaults);
 defaultPostQuery.options = defaultQueryOptions.options;
 
 /**
- * ## Process Query
+ * @description Process query request.
+ *
  * Takes a 'query' object, ensures that type, resource and options are set
  * Replaces occurrences of `%s` in options with slugParam
  * Converts the query config to a promise for the result
  *
- * @param {{type: String, resource: String, options: Object}} query
+ * @param {Object} query
  * @param {String} slugParam
- * @returns {Promise} promise for an API call
+ * @returns {Promise}
  */
 function processQuery(query, slugParam, locals) {
     const api = require('../../../api')[locals.apiVersion];
@@ -50,12 +61,16 @@ function processQuery(query, slugParam, locals) {
         query.options[name] = _.isString(option) ? option.replace(/%s/g, slugParam) : option;
     });
 
-    // Return a promise for the api query
-    return api[query.controller][query.type](query.options);
+    if (config.get('enableDeveloperExperiments')) {
+        query.options.context = {member: locals.member};
+    }
+
+    return (api[query.controller] || api[query.resource])[query.type](query.options);
 }
 
 /**
- * ## Fetch Data
+ * @description Fetch data from API helper for controllers.
+ *
  * Calls out to get posts per page, builds the final posts query & builds any additional queries
  * Wraps the queries using Promise.props to ensure it gets named responses
  * Does a first round of formatting on the response, and returns
@@ -89,7 +104,8 @@ function fetchData(pathOptions, routerOptions, locals) {
 
     // CASE: fetch more data defined by the router e.g. tags, authors - see TaxonomyRouter
     _.each(routerOptions.data, function (query, name) {
-        props[name] = processQuery(query, pathOptions.slug, locals);
+        const dataQueryOptions = _.merge(query, defaultDataQueryOptions[name]);
+        props[name] = processQuery(dataQueryOptions, pathOptions.slug, locals);
     });
 
     return Promise.props(props)
@@ -100,10 +116,12 @@ function fetchData(pathOptions, routerOptions, locals) {
                 response.data = {};
 
                 _.each(routerOptions.data, function (config, name) {
+                    response.data[name] = results[name][config.resource];
+
                     if (config.type === 'browse') {
-                        response.data[name] = results[name];
-                    } else {
-                        response.data[name] = results[name][config.resource];
+                        response.data[name].meta = results[name].meta;
+                        // @TODO remove in v3
+                        response.data[name][config.resource] = results[name][config.resource];
                     }
                 });
             }

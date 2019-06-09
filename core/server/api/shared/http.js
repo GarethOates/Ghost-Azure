@@ -2,6 +2,15 @@ const debug = require('ghost-ignition').debug('api:shared:http');
 const shared = require('../shared');
 const models = require('../../models');
 
+/**
+ * @description HTTP wrapper.
+ *
+ * This wrapper is used in the routes definition (see web/).
+ * The wrapper receives the express request, prepares the frame and forwards the request to the pipeline.
+ *
+ * @param {Function} apiImpl - Pipeline wrapper, which executes the target ctrl function.
+ * @return {Function}
+ */
 const http = (apiImpl) => {
     return (req, res, next) => {
         debug('request');
@@ -15,9 +24,12 @@ const http = (apiImpl) => {
                 id: req.api_key.get('id'),
                 type: req.api_key.get('type')
             };
-            integration = req.api_key.get('integration_id');
+            integration = {
+                id: req.api_key.get('integration_id')
+            };
         }
 
+        // NOTE: "external user" is only used in the subscriber app. External user is ID "0".
         if ((req.user && req.user.id) || (req.user && models.User.isExternalUser(req.user.id))) {
             user = req.user.id;
         }
@@ -77,6 +89,11 @@ const http = (apiImpl) => {
                 res.json(result || {});
             })
             .catch((err) => {
+                req.frameOptions = {
+                    docName: frame.docName,
+                    method: frame.method
+                };
+
                 next(err);
             });
     };

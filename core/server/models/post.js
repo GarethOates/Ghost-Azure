@@ -95,6 +95,8 @@ Post = ghostBookshelf.Model.extend({
      * We ensure that we are catching the event after bookshelf relations.
      */
     onSaved: function onSaved(model, response, options) {
+        ghostBookshelf.Model.prototype.onSaved.apply(this, arguments);
+
         if (options.method !== 'insert') {
             return;
         }
@@ -109,6 +111,8 @@ Post = ghostBookshelf.Model.extend({
     },
 
     onUpdated: function onUpdated(model, attrs, options) {
+        ghostBookshelf.Model.prototype.onUpdated.apply(this, arguments);
+
         model.statusChanging = model.get('status') !== model.previous('status');
         model.isPublished = model.get('status') === 'published';
         model.isScheduled = model.get('status') === 'scheduled';
@@ -179,6 +183,8 @@ Post = ghostBookshelf.Model.extend({
     },
 
     onDestroyed: function onDestroyed(model, options) {
+        ghostBookshelf.Model.prototype.onDestroyed.apply(this, arguments);
+
         if (model.previous('status') === 'published') {
             model.emitChange('unpublished', Object.assign({usePreviousAttribute: true}, options));
         }
@@ -187,6 +193,8 @@ Post = ghostBookshelf.Model.extend({
     },
 
     onDestroying: function onDestroyed(model) {
+        ghostBookshelf.Model.prototype.onDestroying.apply(this, arguments);
+
         this.handleAttachedModels(model);
     },
 
@@ -200,12 +208,16 @@ Post = ghostBookshelf.Model.extend({
         model.related('tags').once('detaching', function onDetached(collection, tag) {
             model.related('tags').once('detached', function onDetached(detachedCollection, response, options) {
                 tag.emitChange('detached', options);
+                model.emitChange('tag.detached', options);
             });
         });
 
         model.related('tags').once('attaching', function onDetached(collection, tags) {
             model.related('tags').once('attached', function onDetached(detachedCollection, response, options) {
-                tags.forEach(tag => tag.emitChange('attached', options));
+                tags.forEach((tag) => {
+                    tag.emitChange('attached', options);
+                    model.emitChange('tag.attached', options);
+                });
             });
         });
 
@@ -315,7 +327,7 @@ Post = ghostBookshelf.Model.extend({
 
         this.handleAttachedModels(model);
 
-        ghostBookshelf.Model.prototype.onSaving.call(this, model, attr, options);
+        ghostBookshelf.Model.prototype.onSaving.apply(this, arguments);
 
         // do not allow generated fields to be overridden via the API
         if (!options.migrating) {
@@ -330,20 +342,35 @@ Post = ghostBookshelf.Model.extend({
             this.set('mobiledoc', JSON.stringify(converters.mobiledocConverter.blankStructure()));
         }
 
-        // render mobiledoc to HTML
-        if (this.hasChanged('mobiledoc') || !this.get('html')) {
-            this.set('html', converters.mobiledocConverter.render(JSON.parse(this.get('mobiledoc'))));
+        // CASE: mobiledoc has changed, generate html
+        // CASE: html is null, but mobiledoc exists (only important for migrations & importing)
+        if (this.hasChanged('mobiledoc') || (!this.get('html') && (options.migrating || options.importing))) {
+            try {
+                this.set('html', converters.mobiledocConverter.render(JSON.parse(this.get('mobiledoc'))));
+            } catch (err) {
+                throw new common.errors.ValidationError({
+                    message: 'Invalid mobiledoc structure.',
+                    help: 'https://docs.ghost.org/concepts/posts/'
+                });
+            }
         }
 
         if (this.hasChanged('html') || !this.get('plaintext')) {
-            this.set('plaintext', htmlToText.fromString(this.get('html'), {
+            const plaintext = htmlToText.fromString(this.get('html'), {
                 wordwrap: 80,
                 ignoreImage: true,
                 hideLinkHrefIfSameAsText: true,
                 preserveNewlines: true,
                 returnDomByDefault: true,
                 uppercaseHeadings: false
-            }));
+            });
+
+            // CASE: html is e.g. <p></p>
+            // @NOTE: Otherwise we will always update the resource to `plaintext: ''` and Bookshelf thinks that this
+            //        value was modified.
+            if (plaintext || plaintext !== this.get('plaintext')) {
+                this.set('plaintext', plaintext);
+            }
         }
 
         // disabling sanitization until we can implement a better version
@@ -362,12 +389,12 @@ Post = ghostBookshelf.Model.extend({
         if (newStatus === 'published' && this.hasChanged('status')) {
             // unless published_by is set and we're importing, set published_by to contextUser
             if (!(this.get('published_by') && options.importing)) {
-                this.set('published_by', this.contextUser(options));
+                this.set('published_by', String(this.contextUser(options)));
             }
         } else {
             // In any other case (except import), `published_by` should not be changed
             if (this.hasChanged('published_by') && !options.importing) {
-                this.set('published_by', this.previous('published_by') || null);
+                this.set('published_by', this.previous('published_by') ? String(this.previous('published_by')) : null);
             }
         }
 
@@ -545,6 +572,13 @@ Post = ghostBookshelf.Model.extend({
         // CASE: never expose the revisions
         delete attrs.mobiledoc_revisions;
 
+        // expose canonical_url only for API v2 calls
+        // NOTE: this can be removed when API v0.1 is dropped. A proper solution for field
+        //       differences on resources like this would be an introduction of API output schema
+        if (!_.get(unfilteredOptions, 'extraProperties', []).includes('canonical_url')) {
+            delete attrs.canonical_url;
+        }
+
         // If the current column settings allow it...
         if (!options.columns || (options.columns && options.columns.indexOf('primary_tag') > -1)) {
             // ... attach a computed property of primary_tag which is the first tag if it is public, else null
@@ -611,6 +645,24 @@ Post = ghostBookshelf.Model.extend({
         delete options.status;
         delete options.staticPages;
         return filter;
+    },
+
+    getAction(event, options) {
+        const actor = this.getActor(options);
+
+        // @NOTE: we ignore internal updates (`options.context.internal`) for now
+        if (!actor) {
+            return;
+        }
+
+        // @TODO: implement context
+        return {
+            event: event,
+            resource_id: this.id || this.previous('id'),
+            resource_type: this.tableName.replace(/s$/, ''),
+            actor_id: actor.id,
+            actor_type: actor.type
+        };
     }
 }, {
     allowedFormats: ['mobiledoc', 'html', 'plaintext'],
@@ -657,10 +709,11 @@ Post = ghostBookshelf.Model.extend({
             // whitelists for the `options` hash argument on methods, by method name.
             // these are the only options that can be passed to Bookshelf / Knex.
             validOptions = {
-                findOne: ['columns', 'importing', 'withRelated', 'require'],
-                findPage: ['page', 'limit', 'columns', 'filter', 'order', 'status', 'staticPages'],
+                findOne: ['columns', 'importing', 'withRelated', 'require', 'filter'],
+                findPage: ['status', 'staticPages'],
                 findAll: ['columns', 'filter'],
-                destroy: ['destroyAll']
+                destroy: ['destroyAll', 'destroyBy'],
+                edit: ['filter']
             };
 
         // The post model additionally supports having a formats option
@@ -708,10 +761,11 @@ Post = ghostBookshelf.Model.extend({
      * @extends ghostBookshelf.Model.findOne to handle post status
      * **See:** [ghostBookshelf.Model.findOne](base.js.html#Find%20One)
      */
-    findOne: function findOne(data, options) {
-        data = _.defaults(data || {}, {
-            status: 'published'
-        });
+    findOne: function findOne(data = {}, options = {}) {
+        // @TODO: remove when we drop v0.1
+        if (!options.filter && !data.status) {
+            data.status = 'published';
+        }
 
         if (data.status === 'all') {
             delete data.status;
@@ -741,6 +795,7 @@ Post = ghostBookshelf.Model.extend({
                             if (found) {
                                 // Pass along the updated attributes for checking status changes
                                 found._previousAttributes = post._previousAttributes;
+                                found._changed = post._changed;
                                 return found;
                             }
                         });

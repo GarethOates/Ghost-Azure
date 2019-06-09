@@ -22,6 +22,15 @@ const authorize = {
             if (req.user && req.user.id) {
                 return next();
             } else {
+                // CASE: has no user access and public api is disabled
+                if (labs.isSet('publicAPI') !== true) {
+                    return next(new common.errors.NoPermissionError({
+                        message: common.i18n.t('errors.middleware.auth.publicAPIDisabled.error'),
+                        context: common.i18n.t('errors.middleware.auth.publicAPIDisabled.context'),
+                        help: common.i18n.t('errors.middleware.auth.forInformationRead', {url: 'https://docs.ghost.org/api/content/'})
+                    }));
+                }
+
                 return next(new common.errors.NoPermissionError({
                     message: common.i18n.t('errors.middleware.auth.pleaseSignIn')
                 }));
@@ -52,16 +61,11 @@ const authorize = {
             return next();
         }
         return next(new common.errors.NoPermissionError({
-            message: common.i18n.t('errors.middleware.auth.pleaseSignInOrAuthenticate')
+            message: common.i18n.t('errors.middleware.auth.authorizationFailed'),
+            context: common.i18n.t('errors.middleware.auth.missingContentMemberOrIntegration')
         }));
     },
 
-    /**
-     * @NOTE:
-     *
-     * We don't support admin api keys yet, but we can already use this authorization helper, because
-     * we have not connected authenticating with admin api keys yet. `req.api_key` will be always null.
-     */
     authorizeAdminApi(req, res, next) {
         const hasUser = req.user && req.user.id;
         const hasApiKey = req.api_key && req.api_key.id;
@@ -70,7 +74,8 @@ const authorize = {
             return next();
         } else {
             return next(new common.errors.NoPermissionError({
-                message: common.i18n.t('errors.middleware.auth.pleaseSignInOrAuthenticate')
+                message: common.i18n.t('errors.middleware.auth.authorizationFailed'),
+                context: common.i18n.t('errors.middleware.auth.missingAdminUserOrIntegration')
             }));
         }
     }

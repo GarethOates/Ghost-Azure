@@ -1,7 +1,8 @@
 const _ = require('lodash'),
     Promise = require('bluebird'),
     debug = require('ghost-ignition').debug('services:routing:controllers:static'),
-    helpers = require('../helpers');
+    helpers = require('../helpers'),
+    config = require('../../../config');
 
 function processQuery(query, locals) {
     const api = require('../../../api')[locals.apiVersion];
@@ -13,14 +14,29 @@ function processQuery(query, locals) {
     //       We override the `include` property for now, because the full data set is required anyway.
     if (_.get(query, 'resource') === 'posts') {
         _.extend(query.options, {
+            // @TODO: Remove "author" when we drop v0.1
             include: 'author,authors,tags'
         });
     }
 
-    // Return a promise for the api query
+    if (config.get('enableDeveloperExperiments')) {
+        Object.assign(query.options, {
+            context: {
+                members: locals.member
+            }
+        });
+    }
+
     return api[query.controller][query.type](query.options);
 }
 
+/**
+ * @description Static route controller.
+ * @param {Object} req
+ * @param {Object} res
+ * @param {Function} next
+ * @returns {Promise}
+ */
 module.exports = function staticController(req, res, next) {
     debug('staticController', res.routerOptions);
 
@@ -38,15 +54,17 @@ module.exports = function staticController(req, res, next) {
                 response.data = {};
 
                 _.each(res.routerOptions.data, function (config, name) {
+                    response.data[name] = result[name][config.resource];
+
                     if (config.type === 'browse') {
-                        response.data[name] = result[name];
-                    } else {
-                        response.data[name] = result[name][config.resource];
+                        response.data[name].meta = result[name].meta;
+                        // @TODO: remove in Ghost 3.0 (see https://github.com/TryGhost/Ghost/issues/10434)
+                        response.data[name][config.resource] = result[name][config.resource];
                     }
                 });
             }
 
-            // @TODO: get rid of this O_O
+            // @TODO: See helpers/secure for more context.
             _.each(response.data, function (data) {
                 helpers.secure(req, data);
             });

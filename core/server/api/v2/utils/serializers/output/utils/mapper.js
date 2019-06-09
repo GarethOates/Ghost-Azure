@@ -1,3 +1,4 @@
+const _ = require('lodash');
 const utils = require('../../../index');
 const url = require('./url');
 const date = require('./date');
@@ -8,11 +9,9 @@ const extraAttrs = require('./extra-attrs');
 const mapUser = (model, frame) => {
     const jsonModel = model.toJSON ? model.toJSON(frame.options) : model;
 
-    url.forUser(model.id, jsonModel);
+    url.forUser(model.id, jsonModel, frame.options);
 
-    if (utils.isContentAPI(frame)) {
-        clean.author(jsonModel);
-    }
+    clean.author(jsonModel, frame);
 
     return jsonModel;
 };
@@ -20,26 +19,28 @@ const mapUser = (model, frame) => {
 const mapTag = (model, frame) => {
     const jsonModel = model.toJSON ? model.toJSON(frame.options) : model;
 
-    url.forTag(model.id, jsonModel);
-
-    if (utils.isContentAPI(frame)) {
-        clean.tag(jsonModel);
-    }
+    url.forTag(model.id, jsonModel, frame.options);
+    clean.tag(jsonModel, frame);
 
     return jsonModel;
 };
 
 const mapPost = (model, frame) => {
-    const jsonModel = model.toJSON(frame.options);
+    const extendedOptions = Object.assign(_.cloneDeep(frame.options), {
+        extraProperties: ['canonical_url']
+    });
 
-    url.forPost(model.id, jsonModel, frame.options);
+    const jsonModel = model.toJSON(extendedOptions);
+
+    url.forPost(model.id, jsonModel, frame);
 
     if (utils.isContentAPI(frame)) {
         date.forPost(jsonModel);
         members.forPost(jsonModel, frame);
-        extraAttrs.forPost(frame, model, jsonModel);
-        clean.post(jsonModel);
     }
+
+    extraAttrs.forPost(frame, model, jsonModel);
+    clean.post(jsonModel, frame);
 
     if (frame.options && frame.options.withRelated) {
         frame.options.withRelated.forEach((relation) => {
@@ -50,29 +51,18 @@ const mapPost = (model, frame) => {
                 jsonModel.tags = jsonModel.tags.map(tag => mapTag(tag, frame));
             }
 
-            if (relation === 'author' && jsonModel.author) {
-                jsonModel.author = mapUser(jsonModel.author, frame);
-            }
-
             if (relation === 'authors' && jsonModel.authors) {
                 jsonModel.authors = jsonModel.authors.map(author => mapUser(author, frame));
             }
         });
     }
 
-    /**
-     * Remove extra data attributes passed for filtering when used with columns/fields as bookshelf doesn't filter it out
-     */
-    if (frame.options.columns && frame.options.columns.indexOf('page') < 0) {
-        delete jsonModel.page;
-    }
-
     return jsonModel;
 };
 
-const mapSettings = (attrs) => {
+const mapSettings = (attrs, frame) => {
     url.forSettings(attrs);
-    extraAttrs.forSettings(attrs);
+    extraAttrs.forSettings(attrs, frame);
     return attrs;
 };
 
@@ -90,8 +80,20 @@ const mapIntegration = (model, frame) => {
     return jsonModel;
 };
 
+const mapImage = (path) => {
+    return url.forImage(path);
+};
+
+const mapAction = (model, frame) => {
+    const attrs = model.toJSON(frame.options);
+    clean.action(attrs);
+    return attrs;
+};
+
 module.exports.mapPost = mapPost;
 module.exports.mapUser = mapUser;
 module.exports.mapTag = mapTag;
 module.exports.mapIntegration = mapIntegration;
 module.exports.mapSettings = mapSettings;
+module.exports.mapImage = mapImage;
+module.exports.mapAction = mapAction;
